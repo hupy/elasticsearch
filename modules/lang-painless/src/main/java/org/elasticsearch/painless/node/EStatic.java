@@ -21,13 +21,12 @@ package org.elasticsearch.painless.node;
 
 import org.elasticsearch.painless.Definition;
 import org.elasticsearch.painless.Globals;
+import org.elasticsearch.painless.Locals;
 import org.elasticsearch.painless.Location;
 import org.elasticsearch.painless.MethodWriter;
 
 import java.util.Objects;
 import java.util.Set;
-
-import org.elasticsearch.painless.Locals;
 
 /**
  * Represents a static type target.
@@ -50,7 +49,7 @@ public final class EStatic extends AExpression {
     @Override
     void analyze(Locals locals) {
         try {
-            actual = Definition.getType(type);
+            actual = Definition.TypeToClass(locals.getDefinition().getType(type));
         } catch (IllegalArgumentException exception) {
             throw createError(new IllegalArgumentException("Not a type [" + type + "]."));
         }

@@ -1,12 +1,17 @@
 #!/bin/bash
 
-# This file contains some utilities to test the elasticsearch scripts,
-# the .deb/.rpm packages and the SysV/Systemd scripts.
+# This file contains some utilities to test the .deb/.rpm
+# packages and the SysV/Systemd scripts.
 
 # WARNING: This testing file must be executed as root and can
-# dramatically change your system. It removes the 'elasticsearch'
-# user/group and also many directories. Do not execute this file
-# unless you know exactly what you are doing.
+# dramatically change your system. It should only be executed
+# in a throw-away VM like those made by the Vagrantfile at
+# the root of the Elasticsearch source code. This should
+# cause the script to fail if it is executed any other way:
+[ -f /etc/is_vagrant_vm ] || {
+  >&2 echo "must be run on a vagrant VM"
+  exit 1
+}
 
 # Licensed to Elasticsearch under one or more contributor
 # license agreements. See the NOTICE file distributed with
@@ -134,6 +139,11 @@ skip_not_zip() {
 
 assert_file_exist() {
     local file="$1"
+    local count=$(echo "$file" | wc -l)
+    [[ "$count" == "1" ]] || {
+      echo "assert_file_exist must be run on a single file at a time but was called on [$count] files: $file"
+      false
+    }
     if [ ! -e "$file" ]; then
         echo "Should exist: ${file} but does not"
     fi
@@ -263,13 +273,16 @@ clean_before_test() {
     userdel elasticsearch > /dev/null 2>&1 || true
     groupdel elasticsearch > /dev/null 2>&1 || true
 
-
     # Removes all files
     for d in "${ELASTICSEARCH_TEST_FILES[@]}"; do
         if [ -e "$d" ]; then
             rm -rf "$d"
         fi
     done
+
+    if is_systemd; then
+        systemctl unmask systemd-sysctl.service
+    fi
 }
 
 purge_elasticsearch() {
@@ -297,8 +310,9 @@ purge_elasticsearch() {
 start_elasticsearch_service() {
     local desiredStatus=${1:-green}
     local index=$2
+    local commandLineArgs=$3
 
-    run_elasticsearch_service 0
+    run_elasticsearch_service 0 $commandLineArgs
 
     wait_for_elasticsearch_status $desiredStatus $index
 
@@ -326,22 +340,16 @@ start_elasticsearch_service() {
 run_elasticsearch_service() {
     local expectedStatus=$1
     local commandLineArgs=$2
-    # Set the CONF_DIR setting in case we start as a service
-    if [ ! -z "$CONF_DIR" ] ; then
-        if is_dpkg ; then
-            echo "CONF_DIR=$CONF_DIR" >> /etc/default/elasticsearch;
+    # Set the ES_PATH_CONF setting in case we start as a service
+    if [ ! -z "$ES_PATH_CONF" ] ; then
+        if is_dpkg; then
+            echo "ES_PATH_CONF=$ES_PATH_CONF" >> /etc/default/elasticsearch;
         elif is_rpm; then
-            echo "CONF_DIR=$CONF_DIR" >> /etc/sysconfig/elasticsearch;
+            echo "ES_PATH_CONF=$ES_PATH_CONF" >> /etc/sysconfig/elasticsearch;
         fi
     fi
 
     if [ -f "/tmp/elasticsearch/bin/elasticsearch" ]; then
-        if [ -z "$CONF_DIR" ]; then
-            local CONF_DIR=""
-            local ES_PATH_CONF=""
-        else
-            local ES_PATH_CONF="-Epath.conf=$CONF_DIR"
-        fi
         # we must capture the exit code to compare so we don't want to start as background process in case we expect something other than 0
         local background=""
         local timeoutCommand=""
@@ -359,9 +367,9 @@ run_elasticsearch_service() {
 # This line is attempting to emulate the on login behavior of /usr/share/upstart/sessions/jayatana.conf
 [ -f /usr/share/java/jayatanaag.jar ] && export JAVA_TOOL_OPTIONS="-javaagent:/usr/share/java/jayatanaag.jar"
 # And now we can start Elasticsearch normally, in the background (-d) and with a pidfile (-p).
-export ES_JVM_OPTIONS=$ES_JVM_OPTIONS
+export ES_PATH_CONF=$ES_PATH_CONF
 export ES_JAVA_OPTS=$ES_JAVA_OPTS
-$timeoutCommand/tmp/elasticsearch/bin/elasticsearch $background -p /tmp/elasticsearch/elasticsearch.pid $ES_PATH_CONF $commandLineArgs
+$timeoutCommand/tmp/elasticsearch/bin/elasticsearch $background -p /tmp/elasticsearch/elasticsearch.pid $commandLineArgs
 BASH
         [ "$status" -eq "$expectedStatus" ]
     elif is_systemd; then
@@ -407,6 +415,51 @@ stop_elasticsearch_service() {
     fi
 }
 
+# the default netcat packages in the distributions we test are not all compatible
+# so we use /dev/tcp - a feature of bash which makes tcp connections
+# http://tldp.org/LDP/abs/html/devref1.html#DEVTCP
+test_port() {
+    local host="$1"
+    local port="$2"
+    cat < /dev/null > "/dev/tcp/$host/$port"
+}
+
+describe_port() {
+    local host="$1"
+    local port="$2"
+    if test_port "$host" "$port"; then
+        echo "port $port on host $host is open"
+    else
+        echo "port $port on host $host is not open"
+    fi
+}
+
+debug_collect_logs() {
+    local es_logfile="$ESLOG/elasticsearch.log"
+    local system_logfile='/var/log/messages'
+
+    if [ -e "$es_logfile" ]; then
+        echo "Here's the elasticsearch log:"
+        cat "$es_logfile"
+    else
+        echo "The elasticsearch log doesn't exist at $es_logfile"
+    fi
+
+    if [ -e "$system_logfile" ]; then
+        echo "Here's the tail of the log at $system_logfile:"
+        tail -n20 "$system_logfile"
+    else
+        echo "The logfile at $system_logfile doesn't exist"
+    fi
+
+    echo "Current java processes:"
+    ps aux | grep java || true
+
+    echo "Testing if ES ports are open:"
+    describe_port 127.0.0.1 9200
+    describe_port 127.0.0.1 9201
+}
+
 # Waits for Elasticsearch to reach some status.
 # $1 - expected status - defaults to green
 wait_for_elasticsearch_status() {
@@ -414,15 +467,10 @@ wait_for_elasticsearch_status() {
     local index=$2
 
     echo "Making sure elasticsearch is up..."
-    wget -O - --retry-connrefused --waitretry=1 --timeout=60 --tries 60 http://localhost:9200/_cluster/health || {
-          echo "Looks like elasticsearch never started. Here is its log:"
-          if [ -e "$ESLOG/elasticsearch.log" ]; then
-              cat "$ESLOG/elasticsearch.log"
-          else
-              echo "The elasticsearch log doesn't exist. Maybe /var/log/messages has something:"
-              tail -n20 /var/log/messages
-          fi
-          false
+    wget -O - --retry-connrefused --waitretry=1 --timeout=120 --tries=120 http://localhost:9200/_cluster/health || {
+        echo "Looks like elasticsearch never started"
+        debug_collect_logs
+        false
     }
 
     if [ -z "index" ]; then
@@ -435,7 +483,7 @@ wait_for_elasticsearch_status() {
     if [ $? -eq 0 ]; then
         echo "Connected"
     else
-        echo "Unable to connect to Elastisearch"
+        echo "Unable to connect to Elasticsearch"
         false
     fi
 
@@ -468,11 +516,6 @@ check_elasticsearch_version() {
     }
 }
 
-install_elasticsearch_test_scripts() {
-    install_script is_guide.painless
-    install_script is_guide.mustache
-}
-
 # Executes some basic Elasticsearch tests
 run_elasticsearch_tests() {
     # TODO this assertion is the same the one made when waiting for
@@ -481,36 +524,18 @@ run_elasticsearch_tests() {
     [ "$status" -eq 0 ]
     echo "$output" | grep -w "green"
 
-    curl -s -XPOST 'http://localhost:9200/library/book/1?refresh=true&pretty' -d '{
+    curl -s -H "Content-Type: application/json" -XPOST 'http://localhost:9200/library/book/1?refresh=true&pretty' -d '{
       "title": "Book #1",
       "pages": 123
     }'
 
-    curl -s -XPOST 'http://localhost:9200/library/book/2?refresh=true&pretty' -d '{
+    curl -s -H "Content-Type: application/json" -XPOST 'http://localhost:9200/library/book/2?refresh=true&pretty' -d '{
       "title": "Book #2",
       "pages": 456
     }'
 
     curl -s -XGET 'http://localhost:9200/_count?pretty' |
       grep \"count\"\ :\ 2
-
-    curl -s -XPOST 'http://localhost:9200/library/book/_count?pretty' -d '{
-      "query": {
-        "script": {
-          "script": {
-            "file": "is_guide",
-            "lang": "painless",
-            "params": {
-              "min_num_pages": 100
-            }
-          }
-        }
-      }
-    }' | grep \"count\"\ :\ 2
-
-    curl -s -XGET 'http://localhost:9200/library/book/_search/template?pretty' -d '{
-      "file": "is_guide"
-    }' | grep \"total\"\ :\ 1
 
     curl -s -XDELETE 'http://localhost:9200/_all'
 }
@@ -525,16 +550,8 @@ move_config() {
     mv "$oldConfig"/* "$ESCONFIG"
     chown -R elasticsearch:elasticsearch "$ESCONFIG"
     assert_file_exist "$ESCONFIG/elasticsearch.yml"
+    assert_file_exist "$ESCONFIG/jvm.options"
     assert_file_exist "$ESCONFIG/log4j2.properties"
-}
-
-# Copies a script into the Elasticsearch install.
-install_script() {
-    local name=$1
-    mkdir -p $ESSCRIPTS
-    local script="$BATS_TEST_DIRNAME/example/scripts/$name"
-    echo "Installing $script to $ESSCRIPTS"
-    cp $script $ESSCRIPTS
 }
 
 # permissions from the user umask with the executable bit set

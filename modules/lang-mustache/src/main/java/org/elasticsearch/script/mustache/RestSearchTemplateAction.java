@@ -19,7 +19,6 @@
 
 package org.elasticsearch.script.mustache;
 
-import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.client.node.NodeClient;
 import org.elasticsearch.common.ParseField;
@@ -37,11 +36,15 @@ import org.elasticsearch.rest.action.search.RestSearchAction;
 import org.elasticsearch.script.ScriptType;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.Set;
 
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 import static org.elasticsearch.rest.RestRequest.Method.POST;
 
 public class RestSearchTemplateAction extends BaseRestHandler {
+
+    private static final Set<String> RESPONSE_PARAMS = Collections.singleton(RestSearchAction.TYPED_KEYS_PARAM);
 
     private static final ObjectParser<SearchTemplateRequest, Void> PARSER;
     static {
@@ -49,10 +52,6 @@ public class RestSearchTemplateAction extends BaseRestHandler {
         PARSER.declareField((parser, request, s) ->
                         request.setScriptParams(parser.map())
                 , new ParseField("params"), ObjectParser.ValueType.OBJECT);
-        PARSER.declareString((request, s) -> {
-            request.setScriptType(ScriptType.FILE);
-            request.setScript(s);
-        }, new ParseField("file"));
         PARSER.declareString((request, s) -> {
             request.setScriptType(ScriptType.STORED);
             request.setScript(s);
@@ -62,15 +61,16 @@ public class RestSearchTemplateAction extends BaseRestHandler {
         PARSER.declareField((parser, request, value) -> {
             request.setScriptType(ScriptType.INLINE);
             if (parser.currentToken() == XContentParser.Token.START_OBJECT) {
-                try (XContentBuilder builder = XContentFactory.contentBuilder(parser.contentType())) {
-                    request.setScript(builder.copyCurrentStructure(parser).bytes().utf8ToString());
+                //convert the template to json which is the only supported XContentType (see CustomMustacheFactory#createEncoder)
+                try (XContentBuilder builder = XContentFactory.jsonBuilder()) {
+                    request.setScript(builder.copyCurrentStructure(parser).string());
                 } catch (IOException e) {
                     throw new ParsingException(parser.getTokenLocation(), "Could not parse inline template", e);
                 }
             } else {
                 request.setScript(parser.text());
             }
-        }, new ParseField("inline", "template"), ObjectParser.ValueType.OBJECT_OR_STRING);
+        }, new ParseField("source", "inline", "template"), ObjectParser.ValueType.OBJECT_OR_STRING);
     }
 
     public RestSearchTemplateAction(Settings settings, RestController controller) {
@@ -85,14 +85,15 @@ public class RestSearchTemplateAction extends BaseRestHandler {
     }
 
     @Override
-    public RestChannelConsumer prepareRequest(RestRequest request, NodeClient client) throws IOException {
-        if (request.hasContentOrSourceParam() == false) {
-            throw new ElasticsearchException("request body is required");
-        }
+    public String getName() {
+        return "search_template_action";
+    }
 
+    @Override
+    public RestChannelConsumer prepareRequest(RestRequest request, NodeClient client) throws IOException {
         // Creates the search request with all required params
         SearchRequest searchRequest = new SearchRequest();
-        RestSearchAction.parseSearchRequest(searchRequest, request, null);
+        RestSearchAction.parseSearchRequest(searchRequest, request, null, size -> searchRequest.source().size(size));
 
         // Creates the search template request
         SearchTemplateRequest searchTemplateRequest;
@@ -106,5 +107,10 @@ public class RestSearchTemplateAction extends BaseRestHandler {
 
     public static SearchTemplateRequest parse(XContentParser parser) throws IOException {
         return PARSER.parse(parser, new SearchTemplateRequest(), null);
+    }
+
+    @Override
+    protected Set<String> responseParams() {
+        return RESPONSE_PARAMS;
     }
 }

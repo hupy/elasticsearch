@@ -25,7 +25,7 @@ PUT index
     }
   },
   "mappings": {
-    "type": {
+    "_doc": {
       "properties": {
         "foo": {
           "type": "keyword",
@@ -36,17 +36,17 @@ PUT index
   }
 }
 
-PUT index/type/1
+PUT index/_doc/1
 {
   "foo": "BÀR"
 }
 
-PUT index/type/2
+PUT index/_doc/2
 {
   "foo": "bar"
 }
 
-PUT index/type/3
+PUT index/_doc/3
 {
   "foo": "baz"
 }
@@ -75,6 +75,7 @@ both index and query time.
   "_shards": {
     "total": 5,
     "successful": 5,
+    "skipped" : 0,
     "failed": 0
   },
   "hits": {
@@ -83,7 +84,7 @@ both index and query time.
     "hits": [
       {
         "_index": "index",
-        "_type": "type",
+        "_type": "_doc",
         "_id": "2",
         "_score": 0.2876821,
         "_source": {
@@ -92,7 +93,7 @@ both index and query time.
       },
       {
         "_index": "index",
-        "_type": "type",
+        "_type": "_doc",
         "_id": "1",
         "_score": 0.2876821,
         "_source": {
@@ -121,7 +122,7 @@ GET index/_search
     }
   }
 }
---------------------------------
+----------------------------
 // CONSOLE
 // TEST[continued]
 
@@ -135,6 +136,7 @@ returns
   "_shards": {
     "total": 5,
     "successful": 5,
+    "skipped" : 0,
     "failed": 0
   },
   "hits": {

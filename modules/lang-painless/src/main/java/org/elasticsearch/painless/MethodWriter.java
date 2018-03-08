@@ -20,16 +20,17 @@
 package org.elasticsearch.painless;
 
 import org.elasticsearch.painless.Definition.Cast;
-import org.elasticsearch.painless.Definition.Sort;
-import org.elasticsearch.painless.Definition.Type;
+import org.elasticsearch.painless.Definition.def;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.objectweb.asm.commons.GeneratorAdapter;
 import org.objectweb.asm.commons.Method;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Deque;
 import java.util.List;
@@ -80,7 +81,7 @@ public final class MethodWriter extends GeneratorAdapter {
     private final BitSet statements;
     private final CompilerSettings settings;
 
-    private final Deque<List<org.objectweb.asm.Type>> stringConcatArgs =
+    private final Deque<List<Type>> stringConcatArgs =
         (INDY_STRING_CONCAT_BOOTSTRAP_HANDLE == null) ?  null : new ArrayDeque<>();
 
     public MethodWriter(int access, Method method, ClassVisitor cw, BitSet statements, CompilerSettings settings) {
@@ -129,67 +130,68 @@ public final class MethodWriter extends GeneratorAdapter {
         mark(end);
     }
 
-    public void writeCast(final Cast cast) {
+    public void writeCast(Cast cast) {
         if (cast != null) {
-            final Type from = cast.from;
-            final Type to = cast.to;
-
-            if (from.sort == Sort.CHAR && to.sort == Sort.STRING) {
+            if (cast.from == char.class && cast.to == String.class) {
                 invokeStatic(UTILITY_TYPE, CHAR_TO_STRING);
-            } else if (from.sort == Sort.STRING && to.sort == Sort.CHAR) {
+            } else if (cast.from == String.class && cast.to == char.class) {
                 invokeStatic(UTILITY_TYPE, STRING_TO_CHAR);
-            } else if (cast.unboxFrom) {
-                if (from.sort == Sort.DEF) {
+            } else if (cast.unboxFrom != null) {
+                unbox(getType(cast.unboxFrom));
+                writeCast(cast.from, cast.to);
+            } else if (cast.unboxTo != null) {
+                if (cast.from == def.class) {
                     if (cast.explicit) {
-                        if      (to.sort == Sort.BOOL)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_BOOLEAN);
-                        else if (to.sort == Sort.BYTE)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_BYTE_EXPLICIT);
-                        else if (to.sort == Sort.SHORT)  invokeStatic(DEF_UTIL_TYPE, DEF_TO_SHORT_EXPLICIT);
-                        else if (to.sort == Sort.CHAR)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_CHAR_EXPLICIT);
-                        else if (to.sort == Sort.INT)    invokeStatic(DEF_UTIL_TYPE, DEF_TO_INT_EXPLICIT);
-                        else if (to.sort == Sort.LONG)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_LONG_EXPLICIT);
-                        else if (to.sort == Sort.FLOAT)  invokeStatic(DEF_UTIL_TYPE, DEF_TO_FLOAT_EXPLICIT);
-                        else if (to.sort == Sort.DOUBLE) invokeStatic(DEF_UTIL_TYPE, DEF_TO_DOUBLE_EXPLICIT);
-                        else throw new IllegalStateException("Illegal tree structure.");
+                        if      (cast.to == Boolean.class)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_BOOLEAN);
+                        else if (cast.to == Byte.class)      invokeStatic(DEF_UTIL_TYPE, DEF_TO_BYTE_EXPLICIT);
+                        else if (cast.to == Short.class)     invokeStatic(DEF_UTIL_TYPE, DEF_TO_SHORT_EXPLICIT);
+                        else if (cast.to == Character.class) invokeStatic(DEF_UTIL_TYPE, DEF_TO_CHAR_EXPLICIT);
+                        else if (cast.to == Integer.class)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_INT_EXPLICIT);
+                        else if (cast.to == Long.class)      invokeStatic(DEF_UTIL_TYPE, DEF_TO_LONG_EXPLICIT);
+                        else if (cast.to == Float.class)     invokeStatic(DEF_UTIL_TYPE, DEF_TO_FLOAT_EXPLICIT);
+                        else if (cast.to == Double.class)    invokeStatic(DEF_UTIL_TYPE, DEF_TO_DOUBLE_EXPLICIT);
+                        else {
+                            throw new IllegalStateException("Illegal tree structure.");
+                        }
                     } else {
-                        if      (to.sort == Sort.BOOL)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_BOOLEAN);
-                        else if (to.sort == Sort.BYTE)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_BYTE_IMPLICIT);
-                        else if (to.sort == Sort.SHORT)  invokeStatic(DEF_UTIL_TYPE, DEF_TO_SHORT_IMPLICIT);
-                        else if (to.sort == Sort.CHAR)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_CHAR_IMPLICIT);
-                        else if (to.sort == Sort.INT)    invokeStatic(DEF_UTIL_TYPE, DEF_TO_INT_IMPLICIT);
-                        else if (to.sort == Sort.LONG)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_LONG_IMPLICIT);
-                        else if (to.sort == Sort.FLOAT)  invokeStatic(DEF_UTIL_TYPE, DEF_TO_FLOAT_IMPLICIT);
-                        else if (to.sort == Sort.DOUBLE) invokeStatic(DEF_UTIL_TYPE, DEF_TO_DOUBLE_IMPLICIT);
-                        else throw new IllegalStateException("Illegal tree structure.");
+                        if      (cast.to == Boolean.class)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_BOOLEAN);
+                        else if (cast.to == Byte.class)      invokeStatic(DEF_UTIL_TYPE, DEF_TO_BYTE_IMPLICIT);
+                        else if (cast.to == Short.class)     invokeStatic(DEF_UTIL_TYPE, DEF_TO_SHORT_IMPLICIT);
+                        else if (cast.to == Character.class) invokeStatic(DEF_UTIL_TYPE, DEF_TO_CHAR_IMPLICIT);
+                        else if (cast.to == Integer.class)   invokeStatic(DEF_UTIL_TYPE, DEF_TO_INT_IMPLICIT);
+                        else if (cast.to == Long.class)      invokeStatic(DEF_UTIL_TYPE, DEF_TO_LONG_IMPLICIT);
+                        else if (cast.to == Float.class)     invokeStatic(DEF_UTIL_TYPE, DEF_TO_FLOAT_IMPLICIT);
+                        else if (cast.to == Double.class)    invokeStatic(DEF_UTIL_TYPE, DEF_TO_DOUBLE_IMPLICIT);
+                        else {
+                            throw new IllegalStateException("Illegal tree structure.");
+                        }
                     }
                 } else {
-                    unbox(from.type);
-                    writeCast(from, to);
+                    writeCast(cast.from, cast.to);
+                    unbox(getType(cast.unboxTo));
                 }
-            } else if (cast.unboxTo) {
-                writeCast(from, to);
-                unbox(to.type);
-            } else if (cast.boxFrom) {
-                box(from.type);
-                writeCast(from, to);
-            } else if (cast.boxTo) {
-                writeCast(from, to);
-                box(to.type);
+            } else if (cast.boxFrom != null) {
+                box(getType(cast.boxFrom));
+                writeCast(cast.from, cast.to);
+            } else if (cast.boxTo != null) {
+                writeCast(cast.from, cast.to);
+                box(getType(cast.boxTo));
             } else {
-                writeCast(from, to);
+                writeCast(cast.from, cast.to);
             }
         }
     }
 
-    private void writeCast(final Type from, final Type to) {
+    private void writeCast(Class<?> from, Class<?> to) {
         if (from.equals(to)) {
             return;
         }
 
-        if (from.sort.numeric && from.sort.primitive && to.sort.numeric && to.sort.primitive) {
-            cast(from.type, to.type);
+        if (from != boolean.class && from.isPrimitive() && to != boolean.class && to.isPrimitive()) {
+            cast(getType(from), getType(to));
         } else {
-            if (!to.clazz.isAssignableFrom(from.clazz)) {
-                checkCast(to.type);
+            if (!to.isAssignableFrom(from)) {
+                checkCast(getType(to));
             }
         }
     }
@@ -198,8 +200,31 @@ public final class MethodWriter extends GeneratorAdapter {
      * Proxy the box method to use valueOf instead to ensure that the modern boxing methods are used.
      */
     @Override
-    public void box(org.objectweb.asm.Type type) {
+    public void box(Type type) {
         valueOf(type);
+    }
+
+    public static Type getType(Class<?> clazz) {
+        if (clazz.isArray()) {
+            Class<?> component = clazz.getComponentType();
+            int dimensions = 1;
+
+            while (component.isArray()) {
+                component = component.getComponentType();
+                ++dimensions;
+            }
+
+            if (component == def.class) {
+                char[] braces = new char[dimensions];
+                Arrays.fill(braces, '[');
+
+                return Type.getType(new String(braces) + Type.getType(Object.class).getDescriptor());
+            }
+        } else if (clazz == def.class) {
+            return Type.getType(Object.class);
+        }
+
+        return Type.getType(clazz);
     }
 
     public void writeBranch(final Label tru, final Label fals) {
@@ -227,10 +252,10 @@ public final class MethodWriter extends GeneratorAdapter {
         }
     }
 
-    public void writeAppendStrings(final Type type) {
+    public void writeAppendStrings(Class<?> clazz) {
         if (INDY_STRING_CONCAT_BOOTSTRAP_HANDLE != null) {
             // Java 9+: record type information
-            stringConcatArgs.peek().add(type.type);
+            stringConcatArgs.peek().add(getType(clazz));
             // prevent too many concat args.
             // If there are too many, do the actual concat:
             if (stringConcatArgs.peek().size() >= MAX_INDY_STRING_CONCAT_ARGS) {
@@ -241,26 +266,24 @@ public final class MethodWriter extends GeneratorAdapter {
             }
         } else {
             // Java 8: push a StringBuilder append
-            switch (type.sort) {
-                case BOOL:   invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_BOOLEAN); break;
-                case CHAR:   invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_CHAR);    break;
-                case BYTE:
-                case SHORT:
-                case INT:    invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_INT);     break;
-                case LONG:   invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_LONG);    break;
-                case FLOAT:  invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_FLOAT);   break;
-                case DOUBLE: invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_DOUBLE);  break;
-                case STRING: invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_STRING);  break;
-                default:     invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_OBJECT);
-            }
+            if      (clazz == boolean.class) invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_BOOLEAN);
+            else if (clazz == char.class)    invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_CHAR);
+            else if (clazz == byte.class  ||
+                     clazz == short.class ||
+                     clazz == int.class)     invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_INT);
+            else if (clazz == long.class)    invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_LONG);
+            else if (clazz == float.class)   invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_FLOAT);
+            else if (clazz == double.class)  invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_DOUBLE);
+            else if (clazz == String.class)  invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_STRING);
+            else                             invokeVirtual(STRINGBUILDER_TYPE, STRINGBUILDER_APPEND_OBJECT);
         }
     }
 
     public void writeToStrings() {
         if (INDY_STRING_CONCAT_BOOTSTRAP_HANDLE != null) {
             // Java 9+: use type information and push invokeDynamic
-            final String desc = org.objectweb.asm.Type.getMethodDescriptor(STRING_TYPE,
-                    stringConcatArgs.pop().stream().toArray(org.objectweb.asm.Type[]::new));
+            final String desc = Type.getMethodDescriptor(STRING_TYPE,
+                    stringConcatArgs.pop().stream().toArray(Type[]::new));
             invokeDynamic("concat", desc, INDY_STRING_CONCAT_BOOTSTRAP_HANDLE);
         } else {
             // Java 8: call toString() on StringBuilder
@@ -269,61 +292,59 @@ public final class MethodWriter extends GeneratorAdapter {
     }
 
     /** Writes a dynamic binary instruction: returnType, lhs, and rhs can be different */
-    public void writeDynamicBinaryInstruction(Location location, Type returnType, Type lhs, Type rhs, 
+    public void writeDynamicBinaryInstruction(Location location, Class<?> returnType, Class<?> lhs, Class<?> rhs,
                                               Operation operation, int flags) {
-        org.objectweb.asm.Type methodType = org.objectweb.asm.Type.getMethodType(returnType.type, lhs.type, rhs.type);
-        
+        Type methodType = Type.getMethodType(getType(returnType), getType(lhs), getType(rhs));
+
         switch (operation) {
             case MUL:
-                invokeDefCall("mul", methodType, DefBootstrap.BINARY_OPERATOR, flags); 
+                invokeDefCall("mul", methodType, DefBootstrap.BINARY_OPERATOR, flags);
                 break;
             case DIV:
-                invokeDefCall("div", methodType, DefBootstrap.BINARY_OPERATOR, flags); 
+                invokeDefCall("div", methodType, DefBootstrap.BINARY_OPERATOR, flags);
                 break;
             case REM:
-                invokeDefCall("rem", methodType, DefBootstrap.BINARY_OPERATOR, flags); 
+                invokeDefCall("rem", methodType, DefBootstrap.BINARY_OPERATOR, flags);
                 break;
             case ADD:
                 // if either side is primitive, then the + operator should always throw NPE on null,
                 // so we don't need a special NPE guard.
                 // otherwise, we need to allow nulls for possible string concatenation.
-                boolean hasPrimitiveArg = lhs.clazz.isPrimitive() || rhs.clazz.isPrimitive();
+                boolean hasPrimitiveArg = lhs.isPrimitive() || rhs.isPrimitive();
                 if (!hasPrimitiveArg) {
                     flags |= DefBootstrap.OPERATOR_ALLOWS_NULL;
                 }
                 invokeDefCall("add", methodType, DefBootstrap.BINARY_OPERATOR, flags);
                 break;
             case SUB:
-                invokeDefCall("sub", methodType, DefBootstrap.BINARY_OPERATOR, flags); 
+                invokeDefCall("sub", methodType, DefBootstrap.BINARY_OPERATOR, flags);
                 break;
             case LSH:
                 invokeDefCall("lsh", methodType, DefBootstrap.SHIFT_OPERATOR, flags);
                 break;
             case USH:
-                invokeDefCall("ush", methodType, DefBootstrap.SHIFT_OPERATOR, flags); 
+                invokeDefCall("ush", methodType, DefBootstrap.SHIFT_OPERATOR, flags);
                 break;
             case RSH:
-                invokeDefCall("rsh", methodType, DefBootstrap.SHIFT_OPERATOR, flags); 
+                invokeDefCall("rsh", methodType, DefBootstrap.SHIFT_OPERATOR, flags);
                 break;
-            case BWAND: 
+            case BWAND:
                 invokeDefCall("and", methodType, DefBootstrap.BINARY_OPERATOR, flags);
                 break;
-            case XOR:   
+            case XOR:
                 invokeDefCall("xor", methodType, DefBootstrap.BINARY_OPERATOR, flags);
                 break;
-            case BWOR:  
+            case BWOR:
                 invokeDefCall("or", methodType, DefBootstrap.BINARY_OPERATOR, flags);
                 break;
             default:
                 throw location.createError(new IllegalStateException("Illegal tree structure."));
         }
     }
-    
-    /** Writes a static binary instruction */
-    public void writeBinaryInstruction(Location location, Type type, Operation operation) {
-        final Sort sort = type.sort;
 
-        if ((sort == Sort.FLOAT || sort == Sort.DOUBLE) &&
+    /** Writes a static binary instruction */
+    public void writeBinaryInstruction(Location location, Class<?> clazz, Operation operation) {
+        if (    (clazz == float.class || clazz == double.class) &&
                 (operation == Operation.LSH || operation == Operation.USH ||
                 operation == Operation.RSH || operation == Operation.BWAND ||
                 operation == Operation.XOR || operation == Operation.BWOR)) {
@@ -331,17 +352,17 @@ public final class MethodWriter extends GeneratorAdapter {
         }
 
         switch (operation) {
-            case MUL:   math(GeneratorAdapter.MUL,  type.type); break;
-            case DIV:   math(GeneratorAdapter.DIV,  type.type); break;
-            case REM:   math(GeneratorAdapter.REM,  type.type); break;
-            case ADD:   math(GeneratorAdapter.ADD,  type.type); break;
-            case SUB:   math(GeneratorAdapter.SUB,  type.type); break;
-            case LSH:   math(GeneratorAdapter.SHL,  type.type); break;
-            case USH:   math(GeneratorAdapter.USHR, type.type); break;
-            case RSH:   math(GeneratorAdapter.SHR,  type.type); break;
-            case BWAND: math(GeneratorAdapter.AND,  type.type); break;
-            case XOR:   math(GeneratorAdapter.XOR,  type.type); break;
-            case BWOR:  math(GeneratorAdapter.OR,   type.type); break;
+            case MUL:   math(GeneratorAdapter.MUL,  getType(clazz)); break;
+            case DIV:   math(GeneratorAdapter.DIV,  getType(clazz)); break;
+            case REM:   math(GeneratorAdapter.REM,  getType(clazz)); break;
+            case ADD:   math(GeneratorAdapter.ADD,  getType(clazz)); break;
+            case SUB:   math(GeneratorAdapter.SUB,  getType(clazz)); break;
+            case LSH:   math(GeneratorAdapter.SHL,  getType(clazz)); break;
+            case USH:   math(GeneratorAdapter.USHR, getType(clazz)); break;
+            case RSH:   math(GeneratorAdapter.SHR,  getType(clazz)); break;
+            case BWAND: math(GeneratorAdapter.AND,  getType(clazz)); break;
+            case XOR:   math(GeneratorAdapter.XOR,  getType(clazz)); break;
+            case BWOR:  math(GeneratorAdapter.OR,   getType(clazz)); break;
             default:
                 throw location.createError(new IllegalStateException("Illegal tree structure."));
         }
@@ -395,7 +416,7 @@ public final class MethodWriter extends GeneratorAdapter {
      * @param flavor type of call
      * @param params flavor-specific parameters
      */
-    public void invokeDefCall(String name, org.objectweb.asm.Type methodType, int flavor, Object... params) {
+    public void invokeDefCall(String name, Type methodType, int flavor, Object... params) {
         Object[] args = new Object[params.length + 2];
         args[0] = settings.getInitialCallSiteDepth();
         args[1] = flavor;

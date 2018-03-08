@@ -68,7 +68,7 @@ public class URLSnapshotRestoreTests extends ESIntegTestCase {
             index("test-idx", "doc", Integer.toString(i), "foo", "bar" + i);
         }
         refresh();
-        assertThat(client.prepareSearch("test-idx").setSize(0).get().getHits().totalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
 
         logger.info("--> snapshot");
         CreateSnapshotResponse createSnapshotResponse = client
@@ -99,7 +99,7 @@ public class URLSnapshotRestoreTests extends ESIntegTestCase {
         logger.info("--> create read-only URL repository");
         assertAcked(client.admin().cluster().preparePutRepository("url-repo")
             .setType(URLRepository.TYPE).setSettings(Settings.builder()
-                .put(URLRepository.URL_SETTING.getKey(), repositoryLocation.toUri().toURL())
+                .put(URLRepository.URL_SETTING.getKey(), repositoryLocation.toUri().toURL().toString())
                 .put("list_directories", randomBoolean())));
         logger.info("--> restore index after deletion");
         RestoreSnapshotResponse restoreSnapshotResponse = client
@@ -112,7 +112,7 @@ public class URLSnapshotRestoreTests extends ESIntegTestCase {
             .actionGet();
         assertThat(restoreSnapshotResponse.getRestoreInfo().totalShards(), greaterThan(0));
 
-        assertThat(client.prepareSearch("test-idx").setSize(0).get().getHits().totalHits(), equalTo(100L));
+        assertThat(client.prepareSearch("test-idx").setSize(0).get().getHits().getTotalHits(), equalTo(100L));
 
         logger.info("--> list available shapshots");
         GetSnapshotsResponse getSnapshotsResponse = client.admin().cluster().prepareGetSnapshots("url-repo").get();

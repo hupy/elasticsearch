@@ -50,6 +50,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -91,8 +92,9 @@ public class RestClient implements Closeable {
     private static final Log logger = LogFactory.getLog(RestClient.class);
 
     private final CloseableHttpAsyncClient client;
-    //we don't rely on default headers supported by HttpAsyncClient as those cannot be replaced
-    private final Header[] defaultHeaders;
+    // We don't rely on default headers supported by HttpAsyncClient as those cannot be replaced.
+    // These are package private for tests.
+    final List<Header> defaultHeaders;
     private final long maxRetryTimeoutMillis;
     private final String pathPrefix;
     private final AtomicInteger lastHostIndex = new AtomicInteger(0);
@@ -104,7 +106,7 @@ public class RestClient implements Closeable {
                HttpHost[] hosts, String pathPrefix, FailureListener failureListener) {
         this.client = client;
         this.maxRetryTimeoutMillis = maxRetryTimeoutMillis;
-        this.defaultHeaders = defaultHeaders;
+        this.defaultHeaders = Collections.unmodifiableList(Arrays.asList(defaultHeaders));
         this.failureListener = failureListener;
         this.pathPrefix = pathPrefix;
         setHosts(hosts);
@@ -112,6 +114,7 @@ public class RestClient implements Closeable {
 
     /**
      * Returns a new {@link RestClientBuilder} to help with {@link RestClient} creation.
+     * Creates a new builder instance and sets the hosts that the client will send requests to.
      */
     public static RestClientBuilder builder(HttpHost... hosts) {
         return new RestClientBuilder(hosts);
@@ -289,40 +292,44 @@ public class RestClient implements Closeable {
     public void performRequestAsync(String method, String endpoint, Map<String, String> params,
                                     HttpEntity entity, HttpAsyncResponseConsumerFactory httpAsyncResponseConsumerFactory,
                                     ResponseListener responseListener, Header... headers) {
-        Objects.requireNonNull(params, "params must not be null");
-        Map<String, String> requestParams = new HashMap<>(params);
-        //ignore is a special parameter supported by the clients, shouldn't be sent to es
-        String ignoreString = requestParams.remove("ignore");
-        Set<Integer> ignoreErrorCodes;
-        if (ignoreString == null) {
-            if (HttpHead.METHOD_NAME.equals(method)) {
-                //404 never causes error if returned for a HEAD request
-                ignoreErrorCodes = Collections.singleton(404);
+        try {
+            Objects.requireNonNull(params, "params must not be null");
+            Map<String, String> requestParams = new HashMap<>(params);
+            //ignore is a special parameter supported by the clients, shouldn't be sent to es
+            String ignoreString = requestParams.remove("ignore");
+            Set<Integer> ignoreErrorCodes;
+            if (ignoreString == null) {
+                if (HttpHead.METHOD_NAME.equals(method)) {
+                    //404 never causes error if returned for a HEAD request
+                    ignoreErrorCodes = Collections.singleton(404);
+                } else {
+                    ignoreErrorCodes = Collections.emptySet();
+                }
             } else {
-                ignoreErrorCodes = Collections.emptySet();
-            }
-        } else {
-            String[] ignoresArray = ignoreString.split(",");
-            ignoreErrorCodes = new HashSet<>();
-            if (HttpHead.METHOD_NAME.equals(method)) {
-                //404 never causes error if returned for a HEAD request
-                ignoreErrorCodes.add(404);
-            }
-            for (String ignoreCode : ignoresArray) {
-                try {
-                    ignoreErrorCodes.add(Integer.valueOf(ignoreCode));
-                } catch (NumberFormatException e) {
-                    throw new IllegalArgumentException("ignore value should be a number, found [" + ignoreString + "] instead", e);
+                String[] ignoresArray = ignoreString.split(",");
+                ignoreErrorCodes = new HashSet<>();
+                if (HttpHead.METHOD_NAME.equals(method)) {
+                    //404 never causes error if returned for a HEAD request
+                    ignoreErrorCodes.add(404);
+                }
+                for (String ignoreCode : ignoresArray) {
+                    try {
+                        ignoreErrorCodes.add(Integer.valueOf(ignoreCode));
+                    } catch (NumberFormatException e) {
+                        throw new IllegalArgumentException("ignore value should be a number, found [" + ignoreString + "] instead", e);
+                    }
                 }
             }
+            URI uri = buildUri(pathPrefix, endpoint, requestParams);
+            HttpRequestBase request = createHttpRequest(method, uri, entity);
+            setHeaders(request, headers);
+            FailureTrackingResponseListener failureTrackingResponseListener = new FailureTrackingResponseListener(responseListener);
+            long startTime = System.nanoTime();
+            performRequestAsync(startTime, nextHost(), request, ignoreErrorCodes, httpAsyncResponseConsumerFactory,
+                    failureTrackingResponseListener);
+        } catch (Exception e) {
+            responseListener.onFailure(e);
         }
-        URI uri = buildUri(pathPrefix, endpoint, requestParams);
-        HttpRequestBase request = createHttpRequest(method, uri, entity);
-        setHeaders(request, headers);
-        FailureTrackingResponseListener failureTrackingResponseListener = new FailureTrackingResponseListener(responseListener);
-        long startTime = System.nanoTime();
-        performRequestAsync(startTime, nextHost(), request, ignoreErrorCodes, httpAsyncResponseConsumerFactory,
-                            failureTrackingResponseListener);
     }
 
     private void performRequestAsync(final long startTime, final HostTuple<Iterator<HttpHost>> hostTuple, final HttpRequestBase request,
@@ -549,7 +556,7 @@ public class RestClient implements Closeable {
         return httpRequest;
     }
 
-    private static URI buildUri(String pathPrefix, String path, Map<String, String> params) {
+    static URI buildUri(String pathPrefix, String path, Map<String, String> params) {
         Objects.requireNonNull(path, "path must not be null");
         try {
             String fullPath;
@@ -702,8 +709,8 @@ public class RestClient implements Closeable {
      * safe, volatile way.
      */
     private static class HostTuple<T> {
-        public final T hosts;
-        public final AuthCache authCache;
+        final T hosts;
+        final AuthCache authCache;
 
         HostTuple(final T hosts, final AuthCache authCache) {
             this.hosts = hosts;

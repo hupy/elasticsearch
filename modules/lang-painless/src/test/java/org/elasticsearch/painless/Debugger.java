@@ -20,6 +20,7 @@
 package org.elasticsearch.painless;
 
 import org.apache.lucene.util.IOUtils;
+import org.elasticsearch.painless.spi.Whitelist;
 import org.objectweb.asm.util.Textifier;
 
 import java.io.PrintWriter;
@@ -30,23 +31,24 @@ final class Debugger {
 
     /** compiles source to bytecode, and returns debugging output */
     static String toString(final String source) {
-        return toString(source, new CompilerSettings());
+        return toString(GenericElasticsearchScript.class, source, new CompilerSettings());
     }
 
     /** compiles to bytecode, and returns debugging output */
-    static String toString(String source, CompilerSettings settings) {
+    static String toString(Class<?> iface, String source, CompilerSettings settings) {
         StringWriter output = new StringWriter();
         PrintWriter outputWriter = new PrintWriter(output);
         Textifier textifier = new Textifier();
         try {
-            Compiler.compile("<debugging>", source, settings, textifier);
+            new Compiler(iface, new Definition(Whitelist.BASE_WHITELISTS))
+                    .compile("<debugging>", source, settings, textifier);
         } catch (Exception e) {
             textifier.print(outputWriter);
             e.addSuppressed(new Exception("current bytecode: \n" + output));
             IOUtils.reThrowUnchecked(e);
             throw new AssertionError();
         }
-        
+
         textifier.print(outputWriter);
         return output.toString();
     }

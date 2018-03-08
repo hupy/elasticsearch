@@ -66,19 +66,19 @@ public final class SCatch extends AStatement {
 
     @Override
     void analyze(Locals locals) {
-        final Type type;
+        Class<?> clazz;
 
         try {
-            type = Definition.getType(this.type);
+            clazz = Definition.TypeToClass(locals.getDefinition().getType(this.type));
         } catch (IllegalArgumentException exception) {
             throw createError(new IllegalArgumentException("Not a type [" + this.type + "]."));
         }
 
-        if (!Exception.class.isAssignableFrom(type.clazz)) {
+        if (!Exception.class.isAssignableFrom(clazz)) {
             throw createError(new ClassCastException("Not an exception type [" + this.type + "]."));
         }
 
-        variable = locals.addVariable(location, type, name, true);
+        variable = locals.addVariable(location, clazz, name, true);
 
         if (block != null) {
             block.lastSource = lastSource;
@@ -103,7 +103,7 @@ public final class SCatch extends AStatement {
         Label jump = new Label();
 
         writer.mark(jump);
-        writer.visitVarInsn(variable.type.type.getOpcode(Opcodes.ISTORE), variable.getSlot());
+        writer.visitVarInsn(MethodWriter.getType(variable.clazz).getOpcode(Opcodes.ISTORE), variable.getSlot());
 
         if (block != null) {
             block.continu = continu;
@@ -111,7 +111,7 @@ public final class SCatch extends AStatement {
             block.write(writer, globals);
         }
 
-        writer.visitTryCatchBlock(begin, end, jump, variable.type.type.getInternalName());
+        writer.visitTryCatchBlock(begin, end, jump, MethodWriter.getType(variable.clazz).getInternalName());
 
         if (exception != null && !block.allEscape) {
             writer.goTo(exception);

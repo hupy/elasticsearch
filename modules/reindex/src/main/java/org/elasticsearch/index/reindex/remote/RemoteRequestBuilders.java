@@ -30,6 +30,7 @@ import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentHelper;
@@ -43,7 +44,15 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static java.util.Collections.singletonMap;
+import static org.elasticsearch.common.unit.TimeValue.timeValueMillis;
 
+/**
+ * Builds requests for remote version of Elasticsearch. Note that unlike most of the
+ * rest of Elasticsearch this file needs to be compatible with very old versions of
+ * Elasticsearch. Thus is often uses identifiers for versions like {@code 2000099}
+ * for {@code 2.0.0-alpha1}. Do not drop support for features from this file just
+ * because the version constants have been removed.
+ */
 final class RemoteRequestBuilders {
     private RemoteRequestBuilders() {}
 
@@ -59,7 +68,14 @@ final class RemoteRequestBuilders {
     static Map<String, String> initialSearchParams(SearchRequest searchRequest, Version remoteVersion) {
         Map<String, String> params = new HashMap<>();
         if (searchRequest.scroll() != null) {
-            params.put("scroll", searchRequest.scroll().keepAlive().toString());
+            TimeValue keepAlive = searchRequest.scroll().keepAlive();
+            if (remoteVersion.before(Version.V_5_0_0)) {
+                /* Versions of Elasticsearch before 5.0 couldn't parse nanos or micros
+                 * so we toss out that resolution, rounding up because more scroll
+                 * timeout seems safer than less. */
+                keepAlive = timeValueMillis((long) Math.ceil(keepAlive.millisFrac()));
+            }
+            params.put("scroll", keepAlive.getStringRep());
         }
         params.put("size", Integer.toString(searchRequest.source().size()));
         if (searchRequest.source().version() == null || searchRequest.source().version() == true) {
@@ -69,7 +85,7 @@ final class RemoteRequestBuilders {
         if (searchRequest.source().sorts() != null) {
             boolean useScan = false;
             // Detect if we should use search_type=scan rather than a sort
-            if (remoteVersion.before(Version.V_2_1_0)) {
+            if (remoteVersion.before(Version.fromId(2010099))) {
                 for (SortBuilder<?> sort : searchRequest.source().sorts()) {
                     if (sort instanceof FieldSortBuilder) {
                         FieldSortBuilder f = (FieldSortBuilder) sort;
@@ -90,9 +106,15 @@ final class RemoteRequestBuilders {
                 params.put("sort", sorts.toString());
             }
         }
-        if (remoteVersion.before(Version.V_2_0_0)) {
+        if (remoteVersion.before(Version.fromId(2000099))) {
             // Versions before 2.0.0 need prompting to return interesting fields. Note that timestamp isn't available at all....
             searchRequest.source().storedField("_parent").storedField("_routing").storedField("_ttl");
+            if (remoteVersion.before(Version.fromId(1000099))) {
+                // Versions before 1.0.0 don't support `"_source": true` so we have to ask for the _source in a funny way.
+                if (false == searchRequest.source().storedFields().fieldNames().contains("_source")) {
+                    searchRequest.source().storedField("_source");
+                }
+            }
         }
         if (searchRequest.source().storedFields() != null && false == searchRequest.source().storedFields().fieldNames().isEmpty()) {
             StringBuilder fields = new StringBuilder(searchRequest.source().storedFields().fieldNames().get(0));
@@ -105,10 +127,11 @@ final class RemoteRequestBuilders {
         return params;
     }
 
-    static HttpEntity initialSearchEntity(SearchRequest searchRequest, BytesReference query) {
+    static HttpEntity initialSearchEntity(SearchRequest searchRequest, BytesReference query, Version remoteVersion) {
         // EMPTY is safe here because we're not calling namedObject
         try (XContentBuilder entity = JsonXContent.contentBuilder();
-                XContentParser queryParser = XContentHelper.createParser(NamedXContentRegistry.EMPTY, query)) {
+                XContentParser queryParser = XContentHelper
+                    .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, query)) {
             entity.startObject();
 
             entity.field("query"); {
@@ -125,7 +148,10 @@ final class RemoteRequestBuilders {
             if (searchRequest.source().fetchSource() != null) {
                 entity.field("_source", searchRequest.source().fetchSource());
             } else {
-                entity.field("_source", true);
+                if (remoteVersion.onOrAfter(Version.fromId(1000099))) {
+                    // Versions before 1.0 don't support `"_source": true` so we have to ask for the source as a stored field.
+                    entity.field("_source", true);
+                }
             }
 
             entity.endObject();
@@ -167,11 +193,21 @@ final class RemoteRequestBuilders {
         return "/_search/scroll";
     }
 
-    static Map<String, String> scrollParams(TimeValue keepAlive) {
-        return singletonMap("scroll", keepAlive.toString());
+    static Map<String, String> scrollParams(TimeValue keepAlive, Version remoteVersion) {
+        if (remoteVersion.before(Version.V_5_0_0)) {
+            /* Versions of Elasticsearch before 5.0 couldn't parse nanos or micros
+             * so we toss out that resolution, rounding up so we shouldn't end up
+             * with 0s. */
+            keepAlive = timeValueMillis((long) Math.ceil(keepAlive.millisFrac()));
+        }
+        return singletonMap("scroll", keepAlive.getStringRep());
     }
 
-    static HttpEntity scrollEntity(String scroll) {
+    static HttpEntity scrollEntity(String scroll, Version remoteVersion) {
+        if (remoteVersion.before(Version.fromId(2000099))) {
+            // Versions before 2.0.0 extract the plain scroll_id from the body
+            return new StringEntity(scroll, ContentType.TEXT_PLAIN);
+        }
         try (XContentBuilder entity = JsonXContent.contentBuilder()) {
             return new StringEntity(entity.startObject()
                 .field("scroll_id", scroll)
@@ -181,7 +217,11 @@ final class RemoteRequestBuilders {
         }
     }
 
-    static HttpEntity clearScrollEntity(String scroll) {
+    static HttpEntity clearScrollEntity(String scroll, Version remoteVersion) {
+        if (remoteVersion.before(Version.fromId(2000099))) {
+            // Versions before 2.0.0 extract the plain scroll_id from the body
+            return new StringEntity(scroll, ContentType.TEXT_PLAIN);
+        }
         try (XContentBuilder entity = JsonXContent.contentBuilder()) {
             return new StringEntity(entity.startObject()
                 .array("scroll_id", scroll)

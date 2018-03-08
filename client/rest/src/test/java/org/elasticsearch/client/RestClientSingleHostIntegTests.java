@@ -28,6 +28,7 @@ import org.apache.http.Header;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
+import org.apache.http.entity.ContentType;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.nio.client.HttpAsyncClientBuilder;
@@ -73,7 +74,7 @@ public class RestClientSingleHostIntegTests extends RestClientTestCase {
 
     @BeforeClass
     public static void startHttpServer() throws Exception {
-        pathPrefix = randomBoolean() ? "/testPathPrefix/" + randomAsciiOfLengthBetween(1, 5) : "";
+        pathPrefix = randomBoolean() ? "/testPathPrefix/" + randomAsciiLettersOfLengthBetween(1, 5) : "";
         httpServer = createHttpServer();
         defaultHeaders = RestClientTestUtil.randomHeaders(getRandom(), "Header-default");
         restClient = createRestClient(false, true);
@@ -100,6 +101,7 @@ public class RestClientSingleHostIntegTests extends RestClientTestCase {
 
         @Override
         public void handle(HttpExchange httpExchange) throws IOException {
+            //copy request body to response body so we can verify it was sent
             StringBuilder body = new StringBuilder();
             try (InputStreamReader reader = new InputStreamReader(httpExchange.getRequestBody(), Consts.UTF_8)) {
                 char[] buffer = new char[256];
@@ -108,6 +110,7 @@ public class RestClientSingleHostIntegTests extends RestClientTestCase {
                     body.append(buffer, 0, read);
                 }
             }
+            //copy request headers to response headers so we can verify they were sent
             Headers requestHeaders = httpExchange.getRequestHeaders();
             Headers responseHeaders = httpExchange.getResponseHeaders();
             for (Map.Entry<String, List<String>> header : requestHeaders.entrySet()) {
@@ -213,6 +216,41 @@ public class RestClientSingleHostIntegTests extends RestClientTestCase {
         bodyTest("GET");
     }
 
+    public void testEncodeParams() throws IOException {
+        {
+            Response response = restClient.performRequest("PUT", "/200", Collections.singletonMap("routing", "this/is/the/routing"));
+            assertEquals(pathPrefix + "/200?routing=this%2Fis%2Fthe%2Frouting", response.getRequestLine().getUri());
+        }
+        {
+            Response response = restClient.performRequest("PUT", "/200", Collections.singletonMap("routing", "this|is|the|routing"));
+            assertEquals(pathPrefix + "/200?routing=this%7Cis%7Cthe%7Crouting", response.getRequestLine().getUri());
+        }
+        {
+            Response response = restClient.performRequest("PUT", "/200", Collections.singletonMap("routing", "routing#1"));
+            assertEquals(pathPrefix + "/200?routing=routing%231", response.getRequestLine().getUri());
+        }
+        {
+            Response response = restClient.performRequest("PUT", "/200", Collections.singletonMap("routing", "中文"));
+            assertEquals(pathPrefix + "/200?routing=%E4%B8%AD%E6%96%87", response.getRequestLine().getUri());
+        }
+        {
+            Response response = restClient.performRequest("PUT", "/200", Collections.singletonMap("routing", "foo bar"));
+            assertEquals(pathPrefix + "/200?routing=foo+bar", response.getRequestLine().getUri());
+        }
+        {
+            Response response = restClient.performRequest("PUT", "/200", Collections.singletonMap("routing", "foo+bar"));
+            assertEquals(pathPrefix + "/200?routing=foo%2Bbar", response.getRequestLine().getUri());
+        }
+        {
+            Response response = restClient.performRequest("PUT", "/200", Collections.singletonMap("routing", "foo/bar"));
+            assertEquals(pathPrefix + "/200?routing=foo%2Fbar", response.getRequestLine().getUri());
+        }
+        {
+            Response response = restClient.performRequest("PUT", "/200", Collections.singletonMap("routing", "foo^bar"));
+            assertEquals(pathPrefix + "/200?routing=foo%5Ebar", response.getRequestLine().getUri());
+        }
+    }
+
     /**
      * Verify that credentials are sent on the first request with preemptive auth enabled (default when provided with credentials).
      */
@@ -249,7 +287,7 @@ public class RestClientSingleHostIntegTests extends RestClientTestCase {
 
     private Response bodyTest(final RestClient restClient, final String method) throws IOException {
         String requestBody = "{ \"field\": \"value\" }";
-        StringEntity entity = new StringEntity(requestBody);
+        StringEntity entity = new StringEntity(requestBody, ContentType.APPLICATION_JSON);
         int statusCode = randomStatusCode(getRandom());
         Response esResponse;
         try {

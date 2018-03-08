@@ -19,6 +19,8 @@
 package org.elasticsearch.test.rest.yaml.section;
 
 import org.elasticsearch.common.ParsingException;
+import org.elasticsearch.common.xcontent.DeprecationHandler;
+import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.yaml.YamlXContent;
 
@@ -53,6 +55,9 @@ public class ClientYamlTestSuite {
         //our yaml parser seems to be too tolerant. Each yaml suite must end with \n, otherwise clients tests might break.
         try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
             ByteBuffer bb = ByteBuffer.wrap(new byte[1]);
+            if (channel.size() == 0) {
+                throw new IllegalArgumentException("test suite file " + file.toString() + " is empty");
+            }
             channel.read(bb, channel.size() - 1);
             if (bb.get(0) != 10) {
                 throw new IOException("test suite [" + api + "/" + filename + "] doesn't end with line feed (\\n)");
@@ -60,7 +65,7 @@ public class ClientYamlTestSuite {
         }
 
         try (XContentParser parser = YamlXContent.yamlXContent.createParser(ExecutableSection.XCONTENT_REGISTRY,
-                Files.newInputStream(file))) {
+            LoggingDeprecationHandler.INSTANCE, Files.newInputStream(file))) {
             return parse(api, filename, parser);
         } catch(Exception e) {
             throw new IOException("Error parsing " + api + "/" + filename, e);

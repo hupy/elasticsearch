@@ -18,9 +18,12 @@
  */
 package org.elasticsearch.gradle.plugin
 
+import nebula.plugin.info.scm.ScmInfoPlugin
 import org.elasticsearch.gradle.BuildPlugin
+import org.elasticsearch.gradle.NoticeTask
 import org.elasticsearch.gradle.test.RestIntegTestTask
 import org.elasticsearch.gradle.test.RunTask
+import org.gradle.api.JavaVersion
 import org.gradle.api.Project
 import org.gradle.api.Task
 import org.gradle.api.XmlProvider
@@ -62,15 +65,16 @@ public class PluginBuildPlugin extends BuildPlugin {
                 project.ext.set("nebulaPublish.maven.jar", false)
             }
 
-            project.integTest.dependsOn(project.bundlePlugin)
+            project.integTestCluster.dependsOn(project.bundlePlugin)
             project.tasks.run.dependsOn(project.bundlePlugin)
             if (isModule) {
-                project.integTest.clusterConfig.module(project)
+                project.integTestCluster.module(project)
                 project.tasks.run.clusterConfig.module(project)
             } else {
-                project.integTest.clusterConfig.plugin(project.path)
+                project.integTestCluster.plugin(project.path)
                 project.tasks.run.clusterConfig.plugin(project.path)
                 addZipPomGeneration(project)
+                addNoticeGeneration(project)
             }
 
             project.namingConventions {
@@ -86,15 +90,15 @@ public class PluginBuildPlugin extends BuildPlugin {
 
     private static void configureDependencies(Project project) {
         project.dependencies {
-            provided "org.elasticsearch:elasticsearch:${project.versions.elasticsearch}"
+            compileOnly "org.elasticsearch:elasticsearch:${project.versions.elasticsearch}"
             testCompile "org.elasticsearch.test:framework:${project.versions.elasticsearch}"
             // we "upgrade" these optional deps to provided for plugins, since they will run
             // with a full elasticsearch server that includes optional deps
-            provided "org.locationtech.spatial4j:spatial4j:${project.versions.spatial4j}"
-            provided "com.vividsolutions:jts:${project.versions.jts}"
-            provided "org.apache.logging.log4j:log4j-api:${project.versions.log4j}"
-            provided "org.apache.logging.log4j:log4j-core:${project.versions.log4j}"
-            provided "net.java.dev.jna:jna:${project.versions.jna}"
+            compileOnly "org.locationtech.spatial4j:spatial4j:${project.versions.spatial4j}"
+            compileOnly "com.vividsolutions:jts:${project.versions.jts}"
+            compileOnly "org.apache.logging.log4j:log4j-api:${project.versions.log4j}"
+            compileOnly "org.apache.logging.log4j:log4j-core:${project.versions.log4j}"
+            compileOnly "org.elasticsearch:jna:${project.versions.jna}"
         }
     }
 
@@ -102,6 +106,7 @@ public class PluginBuildPlugin extends BuildPlugin {
     private static void createIntegTestTask(Project project) {
         RestIntegTestTask integTest = project.tasks.create('integTest', RestIntegTestTask.class)
         integTest.mustRunAfter(project.precommit, project.test)
+        project.integTestCluster.distribution = 'integ-test-zip'
         project.check.dependsOn(integTest)
     }
 
@@ -118,23 +123,23 @@ public class PluginBuildPlugin extends BuildPlugin {
         // add the plugin properties and metadata to test resources, so unit tests can
         // know about the plugin (used by test security code to statically initialize the plugin in unit tests)
         SourceSet testSourceSet = project.sourceSets.test
-        testSourceSet.output.dir(buildProperties.generatedResourcesDir, builtBy: 'pluginProperties')
+        testSourceSet.output.dir(buildProperties.descriptorOutput.parentFile, builtBy: 'pluginProperties')
         testSourceSet.resources.srcDir(pluginMetadata)
 
         // create the actual bundle task, which zips up all the files for the plugin
         Zip bundle = project.tasks.create(name: 'bundlePlugin', type: Zip, dependsOn: [project.jar, buildProperties]) {
-            from buildProperties // plugin properties file
+            from(buildProperties.descriptorOutput.parentFile) {
+                // plugin properties file
+                include(buildProperties.descriptorOutput.name)
+            }
             from pluginMetadata // metadata (eg custom security policy)
             from project.jar // this plugin's jar
-            from project.configurations.runtime - project.configurations.provided // the dep jars
+            from project.configurations.runtime - project.configurations.compileOnly // the dep jars
             // extra files for the plugin to go into the zip
             from('src/main/packaging') // TODO: move all config/bin/_size/etc into packaging
             from('src/main') {
                 include 'config/**'
                 include 'bin/**'
-            }
-            if (project.path.startsWith(':modules:') == false) {
-                into('elasticsearch')
             }
         }
         project.assemble.dependsOn(bundle)
@@ -163,10 +168,12 @@ public class PluginBuildPlugin extends BuildPlugin {
             Files.copy(jarFile.resolveSibling(sourcesFileName), jarFile.resolveSibling(clientSourcesFileName),
                     StandardCopyOption.REPLACE_EXISTING)
 
-            String javadocFileName = jarFile.fileName.toString().replace('.jar', '-javadoc.jar')
-            String clientJavadocFileName = clientFileName.replace('.jar', '-javadoc.jar')
-            Files.copy(jarFile.resolveSibling(javadocFileName), jarFile.resolveSibling(clientJavadocFileName),
-                    StandardCopyOption.REPLACE_EXISTING)
+            if (project.compilerJavaVersion < JavaVersion.VERSION_1_10) {
+                String javadocFileName = jarFile.fileName.toString().replace('.jar', '-javadoc.jar')
+                String clientJavadocFileName = clientFileName.replace('.jar', '-javadoc.jar')
+                Files.copy(jarFile.resolveSibling(javadocFileName), jarFile.resolveSibling(clientJavadocFileName),
+                        StandardCopyOption.REPLACE_EXISTING)
+            }
         }
         project.assemble.dependsOn(clientJar)
     }
@@ -212,7 +219,8 @@ public class PluginBuildPlugin extends BuildPlugin {
     }
 
     /** Adds a task to generate a pom file for the zip distribution. */
-    protected void addZipPomGeneration(Project project) {
+    public static void addZipPomGeneration(Project project) {
+        project.plugins.apply(ScmInfoPlugin.class)
         project.plugins.apply(MavenPublishPlugin.class)
 
         project.publishing {
@@ -242,6 +250,21 @@ public class PluginBuildPlugin extends BuildPlugin {
                     }
                 }
             }
+        }
+    }
+
+    protected void addNoticeGeneration(Project project) {
+        File licenseFile = project.pluginProperties.extension.licenseFile
+        if (licenseFile != null) {
+            project.bundlePlugin.from(licenseFile.parentFile) {
+                include(licenseFile.name)
+            }
+        }
+        File noticeFile = project.pluginProperties.extension.noticeFile
+        if (noticeFile != null) {
+            NoticeTask generateNotice = project.tasks.create('generateNotice', NoticeTask.class)
+            generateNotice.inputFile = noticeFile
+            project.bundlePlugin.from(generateNotice)
         }
     }
 }
